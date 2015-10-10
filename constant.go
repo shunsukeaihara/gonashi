@@ -3,7 +3,7 @@ package gonashi
 type DioPin int
 
 const (
-	KonashiDigitalIO0 IOPin = iota
+	KonashiDigitalIO0 DioPin = iota
 	KonashiDigitalIO1
 	KonashiDigitalIO2
 	KonashiDigitalIO3
