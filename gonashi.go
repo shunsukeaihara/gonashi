@@ -1,7 +1,6 @@
 package gonashi
 
 import (
-	"fmt"
 	"log"
 	"strings"
 	"sync"
@@ -53,13 +52,16 @@ type Konashi struct {
 	Advertisement *gatt.Advertisement
 	Rssi          int
 	T             time.Time
-	connected     chan bool
+	Connected     chan struct{}
+	Disconnected  chan struct{}
 }
 
 func (k *Konashi) Connect() {
-	// idStr := k.Peripheral.ID()
 	k.Peripheral.Device().Connect(k.Peripheral)
-	// ToDo: gonashiのdiscoveredに追加して、そのmapは、onPeriphDiscoveredで参照してchanでやり取りする
+}
+
+func (k *Konashi) DisConnect() {
+	k.Peripheral.Device().CancelConnection(k.Peripheral)
 }
 
 type konashiMap struct {
@@ -73,29 +75,29 @@ type discovered struct {
 	Stop chan struct{}
 }
 
-func (dp *konashiMap) GetDiscovered() map[string]*Konashi {
-	dp.mu.RLock()
-	defer dp.mu.RUnlock()
+func (km *konashiMap) GetKonashiMap() map[string]*Konashi {
+	km.mu.RLock()
+	defer km.mu.RUnlock()
 	ret := map[string]*Konashi{}
-	for id, konashi := range dp.konashis {
+	for id, konashi := range km.konashis {
 		ret[id] = konashi
 	}
 	return ret
 }
 
-func (km *konashiMap) AddKonashi(p gatt.Peripheral, a *gatt.Advertisement, rssi int) {
+func (km *konashiMap) AddKonashi(k *Konashi) {
 	km.mu.Lock()
 	defer km.mu.Unlock()
-	idStr := strings.ToUpper(p.ID())
-	if k, ok := km.konashis[idStr]; ok {
-		k.Peripheral = p
-		k.Advertisement = a
-		k.Rssi = rssi
-		k.T = time.Now()
-	} else {
-		km.konashis[idStr] = &Konashi{p, a, rssi, time.Now(), make(chan bool)}
-	}
+	idStr := strings.ToUpper(k.Peripheral.ID())
+	km.konashis[idStr] = k
 
+	km.Update.In() <- km.konashis
+}
+
+func (km *konashiMap) DelKonashi(idStr string) {
+	km.mu.Lock()
+	defer km.mu.Unlock()
+	delete(km.konashis, idStr)
 	km.Update.In() <- km.konashis
 }
 
@@ -103,6 +105,22 @@ func (km *konashiMap) Clear() {
 	km.mu.Lock()
 	defer km.mu.Unlock()
 	km.konashis = map[string]*Konashi{}
+}
+
+func (dp *discovered) AddDiscovered(p gatt.Peripheral, a *gatt.Advertisement, rssi int) {
+	dp.mu.Lock()
+	defer dp.mu.Unlock()
+	idStr := strings.ToUpper(p.ID())
+	if k, ok := dp.konashis[idStr]; ok {
+		k.Peripheral = p
+		k.Advertisement = a
+		k.Rssi = rssi
+		k.T = time.Now()
+	} else {
+		dp.konashis[idStr] = &Konashi{p, a, rssi, time.Now(), make(chan struct{}, 1), make(chan struct{}, 1)}
+	}
+
+	dp.Update.In() <- dp.konashis
 }
 
 func (dp *discovered) Discard() {
@@ -131,7 +149,7 @@ func (dp *discovered) Discard() {
 	}()
 }
 
-func (g *Gonashi) Discoverd() <-chan interface{} {
+func (g *Gonashi) Discovered() <-chan interface{} {
 	//ToDo: インターフェイスじゃなくてmap[string]*Konashiにしたいけど……
 	return g.discovered.Update.Out()
 }
@@ -162,18 +180,28 @@ func (g *Gonashi) onStateChanged(d gatt.Device, s gatt.State) {
 
 func (g *Gonashi) onPeriphDiscovered(p gatt.Peripheral, a *gatt.Advertisement, rssi int) {
 	if strings.HasPrefix(a.LocalName, "konashi") {
-		g.discovered.AddKonashi(p, a, rssi)
+		g.discovered.AddDiscovered(p, a, rssi)
 	}
 }
 
 func (g *Gonashi) onPeriphConnected(p gatt.Peripheral, err error) {
-	fmt.Println("Disconnected")
+	discovered := g.discovered.GetKonashiMap()
+	idStr := strings.ToUpper(p.ID())
+	if k, ok := discovered[idStr]; ok {
+		g.connected.AddKonashi(k)
+		k.Connected <- struct{}{}
+	}
 }
 
 func (g *Gonashi) onPeriphDisconnected(p gatt.Peripheral, err error) {
-	fmt.Println("Disconnected")
+	connected := g.connected.GetKonashiMap()
+	idStr := strings.ToUpper(p.ID())
+	if k, ok := connected[idStr]; ok {
+		g.connected.DelKonashi(idStr)
+		k.Disconnected <- struct{}{}
+	}
 }
 
 func (g *Gonashi) GetDiscovered() map[string]*Konashi {
-	return g.discovered.GetDiscovered()
+	return g.discovered.GetKonashiMap()
 }
