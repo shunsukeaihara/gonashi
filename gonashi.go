@@ -1,15 +1,17 @@
 package gonashi
 
 import (
-	"log"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/eapache/channels"
-	"github.com/paypal/gatt"
-	"github.com/paypal/gatt/examples/option"
+	"github.com/flemay/gatt"
 )
+
+var ClientOptions = []gatt.Option{
+	gatt.MacDeviceRole(gatt.CentralManager),
+}
 
 type Gonashi struct {
 	device     gatt.Device
@@ -18,7 +20,7 @@ type Gonashi struct {
 }
 
 func NewGonashi() (Gonashi, error) {
-	device, err := gatt.NewDevice(option.DefaultClientOptions...)
+	device, err := gatt.NewDevice(ClientOptions...)
 	if err != nil {
 		return Gonashi{}, err
 	}
@@ -39,29 +41,11 @@ func NewGonashi() (Gonashi, error) {
 	g := Gonashi{device, &dp, &cn}
 	g.device.Handle(
 		gatt.PeripheralDiscovered(g.onPeriphDiscovered),
-		gatt.PeripheralDisconnected(g.onPeriphDisconnected),
 		gatt.PeripheralConnected(g.onPeriphConnected),
+		gatt.PeripheralDisconnected(g.onPeriphDisconnected),
 	)
 	device.Init(func(d gatt.Device, s gatt.State) {})
-
 	return g, nil
-}
-
-type Konashi struct {
-	Peripheral    gatt.Peripheral
-	Advertisement *gatt.Advertisement
-	Rssi          int
-	T             time.Time
-	Connected     chan struct{}
-	Disconnected  chan struct{}
-}
-
-func (k *Konashi) Connect() {
-	k.Peripheral.Device().Connect(k.Peripheral)
-}
-
-func (k *Konashi) DisConnect() {
-	k.Peripheral.Device().CancelConnection(k.Peripheral)
 }
 
 type konashiMap struct {
@@ -112,14 +96,10 @@ func (dp *discovered) AddDiscovered(p gatt.Peripheral, a *gatt.Advertisement, rs
 	defer dp.mu.Unlock()
 	idStr := strings.ToUpper(p.ID())
 	if k, ok := dp.konashis[idStr]; ok {
-		k.Peripheral = p
-		k.Advertisement = a
-		k.Rssi = rssi
-		k.T = time.Now()
+		k.Update(a, rssi)
 	} else {
-		dp.konashis[idStr] = &Konashi{p, a, rssi, time.Now(), make(chan struct{}, 1), make(chan struct{}, 1)}
+		dp.konashis[idStr] = &Konashi{p, a, rssi, time.Now(), make(chan struct{}, 1), make(chan struct{}, 1), sync.RWMutex{}}
 	}
-
 	dp.Update.In() <- dp.konashis
 }
 
@@ -138,10 +118,11 @@ func (dp *discovered) Discard() {
 						count++
 					}
 				}
-				dp.Update.In() <- dp.konashis
+				if count > 0 {
+					dp.Update.In() <- dp.konashis
+				}
 				dp.mu.Unlock()
 			case <-dp.Stop:
-				log.Println("stop")
 				ticker.Stop()
 				return
 			}
@@ -149,9 +130,12 @@ func (dp *discovered) Discard() {
 	}()
 }
 
-func (g *Gonashi) Discovered() <-chan interface{} {
-	//ToDo: インターフェイスじゃなくてmap[string]*Konashiにしたいけど……
-	return g.discovered.Update.Out()
+func (g *Gonashi) Discovered() <-chan map[string]*Konashi {
+	konaMap := <-g.discovered.Update.Out()
+	ch := make(chan map[string]*Konashi, 1)
+	ret, _ := konaMap.(map[string]*Konashi)
+	ch <- ret
+	return ch
 }
 
 func (g *Gonashi) Scan() {
@@ -163,7 +147,6 @@ func (g *Gonashi) StopScanning() {
 	g.device.Scan([]gatt.UUID{}, false)
 	g.device.StopScanning()
 	g.discovered.Stop <- struct{}{}
-	g.discovered.Clear()
 }
 
 func (g *Gonashi) onStateChanged(d gatt.Device, s gatt.State) {
@@ -174,7 +157,6 @@ func (g *Gonashi) onStateChanged(d gatt.Device, s gatt.State) {
 	default:
 		g.device.StopScanning()
 		g.discovered.Stop <- struct{}{}
-		g.discovered.Clear()
 	}
 }
 
@@ -188,6 +170,7 @@ func (g *Gonashi) onPeriphConnected(p gatt.Peripheral, err error) {
 	discovered := g.discovered.GetKonashiMap()
 	idStr := strings.ToUpper(p.ID())
 	if k, ok := discovered[idStr]; ok {
+		k.SetPeripheral(p)
 		g.connected.AddKonashi(k)
 		k.Connected <- struct{}{}
 	}
