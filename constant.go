@@ -1,6 +1,6 @@
 package gonashi
 
-type DioPin int
+type DioPin uint8
 
 const (
 	KonashiDigitalIO0 DioPin = iota
@@ -50,7 +50,7 @@ const (
 	KonashiLevelLow
 )
 
-type PinIOMode int
+type PinIOMode uint8
 
 const (
 	KonashiPinModeOutput PinIOMode = iota

@@ -98,7 +98,7 @@ func (dp *discovered) AddDiscovered(p gatt.Peripheral, a *gatt.Advertisement, rs
 	if k, ok := dp.konashis[idStr]; ok {
 		k.Update(a, rssi)
 	} else {
-		dp.konashis[idStr] = &Konashi{p, a, rssi, time.Now(), make(chan struct{}, 1), make(chan struct{}, 1), sync.RWMutex{}}
+		dp.konashis[idStr] = NewKonashi(p, a, rssi)
 	}
 	dp.Update.In() <- dp.konashis
 }

@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/flemay/gatt"
 	"github.com/shunsukeaihara/gonashi"
 )
 
@@ -27,7 +28,7 @@ func main() {
 		return
 	}
 	g.StopScanning()
-
+	log.Println(gatt.UUID16(0xFF00).String())
 	log.Println(discovered)
 
 	wg := new(sync.WaitGroup)
@@ -41,11 +42,12 @@ func main() {
 			defer func() {
 				konashi.DisConnect()
 				<-konashi.Disconnected
-				log.Println("DisConnected")
+				log.Println("Disconnected")
 				wg.Done()
 			}()
-			log.Println("aaa")
-			log.Println(konashi.DiscoverCharacteristics())
+			for _, c := range konashi.DiscoverCharacteristics() {
+				log.Println(c)
+			}
 
 		}()
 	}
